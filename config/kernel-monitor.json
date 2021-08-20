@@ -25,8 +25,80 @@
 		},
 		{
 			"type": "temporary",
+			"reason": "TCPMemOverFlow",
+			"pattern": "TCP: out of memory -- consider tuning tcp_mem"
+		},
+		{
+			"type": "temporary",
+			"reason": "TCPSkOverFlow",
+			"pattern": "TCP: too many orphaned sockets"
+		},
+		{
+			"type": "temporary",
+			"reason": "NFOverFlow",
+			"pattern": "nf_conntrack: table full, dropping packet"
+		},
+		{
+			"type": "temporary",
+			"reason": "ARPOverFlow",
+			"pattern": "\\w+: neighbor table overflow!"
+		},
+		{
+			"type": "temporary",
+			"reason": "BlockIOError",
+			"pattern": "Buffer I/O error on device (.+), logical block \\d+"
+		},
+		{
+			"type": "temporary",
+			"reason": "Ext4Error",
+			"pattern": "EXT4-fs error .*"
+		},
+
+		{
+			"type": "temporary",
+			"reason": "BlockIOError",
+			"pattern": "blk_update_request: I/O error, dev \\w+, sector \\d+"
+		},
+		{
+			"type": "temporary",
+			"reason": "FileOpenLimit",
+			"pattern": "VFS: file-max limit \\d+ reached"
+		},
+
+		{
+			"type": "temporary",
+			"reason": "PCICardErr",
+			"pattern": "Card not present on Slot(.+)"
+		},
+		{
+			"type": "temporary",
+			"reason": "SlabFreeErr",
+			"pattern": "cache_from_obj: Wrong slab cache. (.+) but object is from (.+)"
+		},
+		{
+			"type": "temporary",
+			"reason": "MemPageFailed",
+			"pattern": "page allocation failure(.) order:[3-5],(.+)"
+		},
+		{
+			"type": "temporary",
+			"reason": "SoftLockUp",
+			"pattern": "BUG: soft lockup - CPU#\\d+ stuck for (.+)"
+		},
+		{
+			"type": "temporary",
 			"reason": "TaskHung",
 			"pattern": "task \\S+:\\w+ blocked for more than \\w+ seconds\\."
+		},
+		{
+			"type": "temporary",
+			"reason": "SchedInAtomic",
+			"pattern": "BUG: scheduling while atomic:(.+)"
+		},
+		{
+			"type": "temporary",
+			"reason": "RCUStall",
+			"pattern": "INFO: \\w+ self-detected stall on CPU (.+)"
 		},
 		{
 			"type": "temporary",
