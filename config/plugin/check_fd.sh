@@ -6,12 +6,16 @@ OK=0
 NONOK=1
 UNKNOWN=2
 
-cd /host/proc
+filepath="/proc"
+if [ -f "/host/proc" ]; then
+filepath="/host/proc"
+fi
 
-count=$(find -maxdepth 1 -type d -name '[0-9]*' | xargs -I {} ls {}/fd | wc -l)
-max=$(cat /host/proc/sys/fs/file-max)
 
-if [[ $count -gt $((max*80/100)) ]]; then
+max=$(cat $filepath/sys/fs/file-max)
+file_nr=$(cat $filepath/sys/fs/file-nr | awk '{print $1}')
+
+if [[ $file_nr -gt $((max*80/100)) ]]; then
    echo "current fd usage is $count and max is $max"
    exit $NONOK
 fi
