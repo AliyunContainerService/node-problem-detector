@@ -31,6 +31,7 @@ ADD ./bin/log-counter /home/kubernetes/bin/log-counter
 ADD ./bin/check-fd /home/kubernetes/bin/check-fd
 ADD ./bin/memleak /home/kubernetes/bin/memleak
 ADD ./bin/checkcgroup /home/kubernetes/bin/checkcgroup
+ADD ./bin/checkdentry /home/kubernetes/bin/checkdentry
 ADD config /config
 RUN chmod +x /config/plugin/*.sh
 ENTRYPOINT ["/node-problem-detector", "--system-log-monitors=/config/kernel-monitor.json"]

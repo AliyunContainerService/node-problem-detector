@@ -126,6 +126,14 @@ version:
         $(BUILD_TAGS) \
         ./cmd/checkcgroup
 
+./bin/checkdentry: $(PKG_SOURCES)
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GO111MODULE=on go build \
+        -mod vendor \
+        -o bin/checkdentry \
+        -ldflags '-X $(PKG)/pkg/version.version=$(VERSION)' \
+        $(BUILD_TAGS) \
+        ./cmd/checkdentry
+
 Dockerfile: Dockerfile.in
 	sed -e 's|@BASEIMAGE@|$(BASEIMAGE)|g' $< >$@
 
@@ -142,12 +150,12 @@ e2e-test: vet fmt build-tar
 	-boskos-project-type=$(BOSKOS_PROJECT_TYPE) -job-name=$(JOB_NAME) \
 	-artifacts-dir=$(ARTIFACTS)
 
-build-binaries: ./bin/node-problem-detector ./bin/log-counter ./bin/check-fd ./bin/memleak ./bin/checkcgroup
+build-binaries: ./bin/node-problem-detector ./bin/log-counter ./bin/check-fd ./bin/memleak ./bin/checkdentry ./bin/checkcgroup
 
 build-container: build-binaries Dockerfile
 	docker build -t $(IMAGE) .
 
-build-tar: ./bin/node-problem-detector ./bin/log-counter ./bin/check-fd ./bin/memleak ./bin/checkcgroup
+build-tar: ./bin/node-problem-detector ./bin/log-counter ./bin/check-fd ./bin/memleak ./bin/checkdentry ./bin/checkcgroup
 	tar -zcvf $(TARBALL) bin/ config/ test/e2e-install.sh
 	sha1sum $(TARBALL)
 	md5sum $(TARBALL)

@@ -1,0 +1,29 @@
+{
+  "plugin": "custom",
+  "pluginConfig": {
+    "invoke_interval": "200s",
+    "timeout": "60s",
+    "max_output_length": 256,
+    "concurrency": 1
+  },
+  "source": "checkdentry-custom-plugin-monitor",
+  "conditions": [
+    {
+      "type": "dentryPressure",
+      "reason": "NodeHasNodentryPressure",
+      "message": "node has no dentry pressure"
+    }
+  ],
+  "rules": [
+    {
+      "type": "permanent",
+      "condition": "dentryPressure",
+      "reason": "NodeHasdentryPressure",
+      "path": "/home/kubernetes/bin/checkdentry",
+	  "args": [
+	  "--t=100000000"
+	],
+      "message": "Node has  dentry pressure"
+    }
+  ]
+}
