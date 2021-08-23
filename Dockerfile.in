@@ -29,6 +29,7 @@ RUN test -h /etc/localtime && rm -f /etc/localtime && cp /usr/share/zoneinfo/UTC
 ADD ./bin/node-problem-detector /node-problem-detector
 ADD ./bin/log-counter /home/kubernetes/bin/log-counter
 ADD ./bin/check-fd /home/kubernetes/bin/check-fd
+ADD ./bin/memleak /home/kubernetes/bin/memleak
 ADD config /config
 RUN chmod +x /config/plugin/*.sh
 ENTRYPOINT ["/node-problem-detector", "--system-log-monitors=/config/kernel-monitor.json"]

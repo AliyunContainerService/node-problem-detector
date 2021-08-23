@@ -1,0 +1,29 @@
+{
+  "plugin": "custom",
+  "pluginConfig": {
+    "invoke_interval": "600s",
+    "timeout": "60s",
+    "max_output_length": 256,
+    "concurrency": 1
+  },
+  "source": "memleak-custom-plugin-monitor",
+  "conditions": [
+    {
+      "type": "Memleak",
+      "reason": "NodeHasNoMemleak",
+      "message": "node has no memleak"
+    }
+  ],
+  "rules": [
+    {
+      "type": "permanent",
+      "condition": "Memleak",
+      "reason": "NodeHasMemleak",
+      "path": "/home/kubernetes/bin/memleak",
+	  "args": [
+	  "--t=15"
+	],
+      "message": "kernel slab memlealk"
+    }
+  ]
+}
