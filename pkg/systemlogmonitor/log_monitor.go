@@ -18,6 +18,7 @@ package systemlogmonitor
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/heapster/common/kubernetes"
@@ -26,9 +27,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
-
-	"fmt"
 	"time"
 
 	"github.com/golang/glog"
@@ -65,7 +63,7 @@ func init() {
 }
 
 func init() {
-	uuidRegx = regexp.MustCompile("[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}")
+	uuidRegx = regexp.MustCompile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 }
 
 type logMonitor struct {
@@ -209,7 +207,6 @@ func (l *logMonitor) generateStatus(logs []*logtypes.Log, rule systemlogtypes.Ru
 	if rule.Reason == OOMREASON && k8sClient != nil {
 		uuid := string(uuidRegx.Find([]byte(message)))
 
-		uuid = strings.ReplaceAll(uuid, "_", "-")
 		pl, err := k8sClient.CoreV1().Pods("").List(metav1.ListOptions{})
 		if err != nil {
 			glog.Error("Error in getting pods: %v", err.Error())
