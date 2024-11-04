@@ -8,9 +8,6 @@ ARG BUILDPLATFORM
 ARG BUILDARCH
 ARG TARGETARCH
 
-# default is a wildcard path that shouldn't match anything in COPY command. REF: https://github.com/kubernetes/node-problem-detector/blob/master/Makefile#L105
-ARG LOGCOUNTER=*dont-include-log-counter
-
 RUN echo "I am running on $BUILDPLATFORM $BUILDARCH, building for $TARGETPLATFORM $TARGETARCH"
 
 ####### go env #######
@@ -65,11 +62,11 @@ RUN make build-tar LINUX_PLATFORMS=linux_$TARGETARCH ENABLE_JOURNALD=1
 
 #######################################################
 
-# default is a wildcard path that shouldn't match anything in COPY command. REF: https://github.com/kubernetes/node-problem-detector/blob/master/Makefile#L105
-ARG LOGCOUNTER=*dont-include-log-counter
-
 FROM --platform=$TARGETPLATFORM registry-cn-hangzhou.ack.aliyuncs.com/dev/alinux:3-update
 MAINTAINER KeyOfSpectator <shichun.fsc@alibaba-inc.com>
+
+# default is a wildcard path that shouldn't match anything in COPY command. REF: https://github.com/kubernetes/node-problem-detector/blob/master/Makefile#L105
+ARG LOGCOUNTER=*dont-include-log-counter
 
 RUN yum install systemd -y && yum install pciutils -y && rm -rf /var/cache/yum/
 RUN systemctl --version
