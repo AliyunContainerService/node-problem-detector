@@ -151,6 +151,8 @@ output/windows_amd64/test/bin/%.exe: $(PKG_SOURCES)
 		-tags "$(WINDOWS_BUILD_TAGS)" \
 		./test/e2e/$(subst -,,$*)
 
+# =x86_64-linux-gnu-gcc need yum install gcc-x86_64-linux-gnu.x86_64
+
 output/linux_amd64/bin/%: $(PKG_SOURCES)
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=$(CGO_ENABLED) GO111MODULE=on \
 #	  CC=x86_64-linux-gnu-gcc go build \

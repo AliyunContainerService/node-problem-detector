@@ -1,0 +1,87 @@
+ARG GO_VERSION=1.17
+FROM --platform=$TARGETPLATFORM golang:${GO_VERSION} as gobase
+ENV GOBIN /usr/local/go/bin
+
+FROM --platform=$TARGETPLATFORM centos:centos8 AS builder
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG BUILDARCH
+ARG TARGETARCH
+
+# default is a wildcard path that shouldn't match anything in COPY command. REF: https://github.com/kubernetes/node-problem-detector/blob/master/Makefile#L105
+ARG LOGCOUNTER=*dont-include-log-counter
+
+RUN echo "I am running on $BUILDPLATFORM $BUILDARCH, building for $TARGETPLATFORM $TARGETARCH"
+
+####### go env #######
+
+ENV GOLANG_VERSION ${GO_VERSION}
+ENV GOBIN /usr/local/go/bin
+ENV GOROOT /usr/local/go
+ENV PATH /usr/bin:/usr/local/bin:/usr/local/go/bin:/sbin:/bin
+COPY --from=gobase /usr/local/go /usr/local/go
+
+####### end o env #######
+
+RUN sed -i -e "s|mirrorlist=|#mirrorlist=|g" /etc/yum.repos.d/CentOS-*
+RUN sed -i -e "s|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g" /etc/yum.repos.d/CentOS-*
+RUN yum -y install yum-utils device-mapper-persistent-data lvm2 iptables openssl net-tools binutils wget git unzip\
+ && yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo\
+ #&& yum install docker -b current -y\
+ && yum install docker-ce-19.03.15  -y\
+ && yum clean all && rm -rf /var/cache/yum\
+ && useradd -M -s /bin/false dockremap\
+ && echo "dockremap:524288:65536" >> /etc/subuid\
+ && echo "dockremap:524288:65536" >> /etc/subgid
+
+RUN yum -y update; yum clean all; \
+    yum -y install systemd; yum clean all; \
+    yum -y install libsystemd-dev; yum clean all;\
+    yum -y install systemd-devel; yum clean all;\
+    yum -y install gcc-x86_64-linux-gnu.x86_64; yum clean all;\
+    yum -y install docker-ce-19.03.15; yum clean all;\
+    yum -y install make automake gcc gcc-c++ kernel-devel; yum clean all;
+
+
+
+#######################################################
+
+ENV GO111MODULE=on
+ENV GOPROXY=https://goproxy.cn,direct
+
+ADD . /src/github.com/AliyunContainerService/node-problem-detector
+ENV GOPATH /:/src/github.com/AliyunContainerService/node-problem-detector/vendor
+WORKDIR /src/github.com/AliyunContainerService/node-problem-detector
+
+RUN  # VERSION="{{.VERSION}}"
+RUN  # IMAGES="{{.VERSION}}"
+RUN  # REGIONS="{{.REGIONS}}"
+RUN  # LOG_LEVEL="{{.LOG_LEVEL}}"
+# RUN  ls /src/github.com/AliyunContainerService/node-problem-detector/
+# RUN  cd /src/github.com/AliyunContainerService/node-problem-detector/
+
+RUN make build-binaries LINUX_PLATFORMS=linux_$TARGETARCH ENABLE_JOURNALD=1
+RUN make build-tar LINUX_PLATFORMS=linux_$TARGETARCH ENABLE_JOURNALD=1
+
+#######################################################
+
+# default is a wildcard path that shouldn't match anything in COPY command. REF: https://github.com/kubernetes/node-problem-detector/blob/master/Makefile#L105
+ARG LOGCOUNTER=*dont-include-log-counter
+
+FROM --platform=$TARGETPLATFORM registry-cn-hangzhou.ack.aliyuncs.com/dev/alinux:3-update
+MAINTAINER KeyOfSpectator <shichun.fsc@alibaba-inc.com>
+
+RUN yum install systemd -y && yum install pciutils -y && rm -rf /var/cache/yum/
+RUN systemctl --version
+
+# RUN clean-install util-linux libsystemd0 systemd bash lsof curl
+
+# Avoid symlink of /etc/localtime.
+RUN test -h /etc/localtime && rm -f /etc/localtime && cp /usr/share/zoneinfo/UTC /etc/localtime || true
+
+COPY --from=builder /src/github.com/AliyunContainerService/node-problem-detector/bin/node-problem-detector /node-problem-detector
+COPY --from=builder /src/github.com/AliyunContainerService/node-problem-detector/bin/health-checker ${LOGCOUNTER} /home/kubernetes/bin/
+
+COPY --from=builder /src/github.com/AliyunContainerService/node-problem-detector/config /config
+RUN chmod +x /config/plugin/*.sh
+ENTRYPOINT ["/node-problem-detector", "--config.system-log-monitor=/config/kernel-monitor.json"]

@@ -19,26 +19,34 @@ package systemlogmonitor
 import (
 	"regexp"
 	"strings"
+	"time"
 
 	"k8s.io/node-problem-detector/pkg/systemlogmonitor/types"
 )
 
 // LogBuffer buffers the logs and supports match in the log buffer with regular expression.
 type LogBuffer interface {
-	// Push pushes log into the log buffer.
+	// Push pushes log into the log buffer. It will panic if the buffer is full.
 	Push(*types.Log)
+	// Poll poll log from the log buffer. It returns nil if no log is available.
+	Poll() *types.Log
 	// Match with regular expression in the log buffer.
 	Match(string) []*types.Log
-	// String returns a concatenated string of the buffered logs.
-	String() string
+
+	Clean()
+
+	SetLookback(lookback *time.Duration)
 }
 
 type logBuffer struct {
 	// buffer is a simple ring buffer.
-	buffer  []*types.Log
-	msg     []string
-	max     int
-	current int
+	buffer   []*types.Log
+	msg      []string
+	max      int
+	write    int
+	read     int
+	size     int
+	lookback *time.Duration
 }
 
 // NewLogBuffer creates log buffer with max line number limit. Because we only match logs
@@ -50,50 +58,66 @@ func NewLogBuffer(maxLines int) *logBuffer {
 		buffer: make([]*types.Log, maxLines, maxLines),
 		msg:    make([]string, maxLines, maxLines),
 		max:    maxLines,
+		write:  0,
+		read:   0,
+		size:   0,
 	}
 }
 
+func (b *logBuffer) SetLookback(lookback *time.Duration) {
+	b.lookback = lookback
+}
+
 func (b *logBuffer) Push(log *types.Log) {
-	b.buffer[b.current%b.max] = log
-	b.msg[b.current%b.max] = log.Message
-	b.current++
+	if b.size == b.max {
+		b.read = (b.read + 1) % b.max
+		b.size--
+	}
+	b.buffer[b.write] = log
+	b.msg[b.write] = log.Message
+	b.write = (b.write + 1) % b.max
+	b.size++
+}
+
+func (b *logBuffer) Poll() *types.Log {
+	if b.size == 0 {
+		return nil
+	}
+	item := b.buffer[b.read]
+	b.read = (b.read + 1) % b.max
+	b.size--
+	return item
+}
+
+func (b *logBuffer) Clean() {
+	b.read = b.write
+	b.size = 0
+}
+
+func (b *logBuffer) IsEmpty() bool {
+	return b.size == 0
+}
+
+func (b *logBuffer) IsFull() bool {
+	return b.size == b.max
 }
 
 // TODO(random-liu): Cache regexp if garbage collection becomes a problem someday.
 func (b *logBuffer) Match(expr string) []*types.Log {
-	// The expression should be checked outside, and it must match to the end.
+	// The expression should be checked outside
 	reg := regexp.MustCompile(expr + `\z`)
-	log := b.String()
-	loc := reg.FindStringIndex(log)
-	if loc == nil {
-		// No match
-		return nil
-	}
-	// reverse index
-	s := len(log) - loc[0] - 1
-	total := 0
-	matched := []*types.Log{}
-	for i := b.tail(); i >= b.current && b.buffer[i%b.max] != nil; i-- {
-		matched = append(matched, b.buffer[i%b.max])
-		total += len(b.msg[i%b.max]) + 1 // Add '\n'
-		if total > s {
-			break
+	var matched []*types.Log
+
+	for i := b.read; i != b.write; i = (i + 1) % b.max {
+		if b.lookback != nil && b.buffer[i] != nil && b.buffer[i].Timestamp.Before(time.Now().Add(-*b.lookback)) {
+			// not ontime log
+			continue
+		}
+		if b.buffer[i] != nil && reg.MatchString(b.buffer[i].Message) {
+			matched = append(matched, b.buffer[i])
 		}
 	}
-	for i := 0; i < len(matched)/2; i++ {
-		matched[i], matched[len(matched)-i-1] = matched[len(matched)-i-1], matched[i]
-	}
 	return matched
-}
-
-func (b *logBuffer) String() string {
-	logs := append(b.msg[b.current%b.max:], b.msg[:b.current%b.max]...)
-	return concatLogs(logs)
-}
-
-// tail returns current tail index.
-func (b *logBuffer) tail() int {
-	return b.current + b.max - 1
 }
 
 // concatLogs concatenates multiple lines of logs into one string.

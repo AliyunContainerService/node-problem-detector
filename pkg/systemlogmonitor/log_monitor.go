@@ -18,7 +18,12 @@ package systemlogmonitor
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/patrickmn/go-cache"
 	"io/ioutil"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/heapster/common/kubernetes"
 	"k8s.io/node-problem-detector/cmd/options"
@@ -27,13 +32,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"fmt"
 	"time"
 
 	"github.com/golang/glog"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/node-problem-detector/pkg/problemdaemon"
 	"k8s.io/node-problem-detector/pkg/problemmetrics"
 	"k8s.io/node-problem-detector/pkg/systemlogmonitor/logwatchers"
@@ -54,6 +55,12 @@ const (
 var (
 	uuidRegx  *regexp.Regexp
 	k8sClient *clientset.Clientset
+	nodeName  string
+
+	// cache setting
+	cacheExpireDurationMinutesEachPod int64 = 30
+	cacheExpireDuration                     = time.Minute * 30 // cache default expire duration = 30min
+	cacheCleanupInterval                    = time.Minute * 60 // cache default cleanup interval = 60min
 )
 
 func init() {
@@ -77,6 +84,12 @@ type logMonitor struct {
 	logCh      <-chan *logtypes.Log
 	output     chan *types.Status
 	tomb       *tomb.Tomb
+
+	// cache-key: pod uuid
+	// cache-value format: pod_name@pod_namespace
+	// thread-safe
+	// 1w pod estimate 10Mb memory
+	cache *cache.Cache
 }
 
 func InitK8sClientOrDie(options *options.NodeProblemDetectorOptions) *clientset.Clientset {
@@ -91,6 +104,7 @@ func InitK8sClientOrDie(options *options.NodeProblemDetectorOptions) *clientset.
 	cfg.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
 	cfg.ContentType = "application/vnd.kubernetes.protobuf"
 	k8sClient = clientset.NewForConfigOrDie(cfg)
+	nodeName = options.NodeName
 	return k8sClient
 }
 
@@ -99,6 +113,7 @@ func NewLogMonitorOrDie(configPath string) types.Monitor {
 	l := &logMonitor{
 		configPath: configPath,
 		tomb:       tomb.NewTomb(),
+		cache:      cache.New(cacheExpireDuration, cacheCleanupInterval),
 	}
 
 	f, err := ioutil.ReadFile(configPath)
@@ -119,6 +134,12 @@ func NewLogMonitorOrDie(configPath string) types.Monitor {
 
 	l.watcher = logwatchers.GetLogWatcherOrDie(l.config.WatcherConfig)
 	l.buffer = NewLogBuffer(l.config.BufferSize)
+	lookback, err := time.ParseDuration(l.config.Lookback)
+	if err != nil {
+		glog.Errorf("log monitor parse lookback error. err: %v, lookback config: %v", err, l.config.Lookback)
+	} else {
+		l.buffer.SetLookback(&lookback)
+	}
 	// A 1000 size channel should be big enough.
 	l.output = make(chan *types.Status, 1000)
 
@@ -196,33 +217,32 @@ func (l *logMonitor) parseLog(log *logtypes.Log) {
 			continue
 		}
 		status := l.generateStatus(matched, rule)
-		glog.Infof("New status generated: %+v", status)
+
+		// debug log 20240325 shichun.fsc
+		var matched_logs []logtypes.Log
+		for _, matched_log := range matched {
+			matched_logs = append(matched_logs, *matched_log)
+		}
+		glog.Infof("New status generated. raw log: %v, matched: %v, ruleReason: %v, status: %+v", log, matched_logs, rule.Reason, status)
+
 		l.output <- status
 	}
+	l.buffer.Clean()
 }
 
 // generateStatus generates status from the logs.
 func (l *logMonitor) generateStatus(logs []*logtypes.Log, rule systemlogtypes.Rule) *types.Status {
 	// We use the timestamp of the first log line as the timestamp of the status.
 	timestamp := logs[0].Timestamp
-	message := generateMessage(logs)
+	logContent := generateMessage(logs)
+	message := logContent // default event message set to original log content
 	if rule.Reason == OOMREASON && k8sClient != nil {
-		uuid := string(uuidRegx.Find([]byte(message)))
-
+		uuid := string(uuidRegx.Find([]byte(logContent)))
 		uuid = strings.ReplaceAll(uuid, "_", "-")
-		pl, err := k8sClient.CoreV1().Pods("").List(metav1.ListOptions{})
-		if err != nil {
-			glog.Error("Error in getting pods: %v", err.Error())
-		} else {
-			for _, pod := range pl.Items {
-				if string(pod.UID) == uuid {
-					message = fmt.Sprintf("pod was OOM killed. node:%s pod:%s namespace:%s uuid:%s",
-						pod.Spec.NodeName, pod.Name, pod.Namespace, uuid)
-					break
-				}
-			}
-		}
+		// generate event message from cached pod logic.
+		message = l.generateEventMessage(uuid, message)
 	}
+
 	var events []types.Event
 	var changedConditions []*types.Condition
 	if rule.Type == types.Temp {
@@ -285,6 +305,69 @@ func (l *logMonitor) generateStatus(logs []*logtypes.Log, rule systemlogtypes.Ru
 	}
 }
 
+func (l *logMonitor) generateEventMessage(uuid string, logMessage string) string {
+	// check cache
+	if cacheVal, ok := l.cache.Get(uuid); ok {
+		// 1. pod cache hit
+		podName, namespace := parseCache(uuid, cacheVal.(string))
+		if podName != "" {
+			return generatePodOOMEventMessage(podName, uuid, namespace, nodeName)
+		} else {
+			// 1.1 cache dirty, try re cache
+			err := l.listPodAndCache()
+			if err != nil {
+				glog.Errorf("pod oom found, list and cache pod list error. pod uuid: %v, error: %v, cache value: %v", uuid, err, cacheVal)
+			}
+			if cacheVal, ok := l.cache.Get(uuid); ok {
+				podName, namespace := parseCache(uuid, cacheVal.(string))
+				glog.V(9).Infof("pod oom hit pod list cache. podName: %v, namespace: %v", podName, namespace)
+				if podName != "" {
+					return generatePodOOMEventMessage(podName, uuid, namespace, nodeName)
+				} else {
+					glog.Errorf("pod oom found, but pod parse cache error. pod uuid: %v, cache value: %v", uuid, cacheVal)
+				}
+			} else {
+				glog.Errorf("pod oom found, but pod get cache error. pod uuid: %v, cache value: %v", uuid, cacheVal)
+			}
+		}
+	} else {
+		// 2. pod cache not hit. try list and cache.
+		err := l.listPodAndCache()
+		if err != nil {
+			glog.Errorf("pod oom found, list and cache pod list error. pod uuid: %v, error: %v, cache value: %v", uuid, err, cacheVal)
+		}
+		if cacheVal, ok := l.cache.Get(uuid); ok {
+			podName, namespace := parseCache(uuid, cacheVal.(string))
+			if podName != "" {
+				return generatePodOOMEventMessage(podName, uuid, namespace, nodeName)
+			} else {
+				glog.Errorf("pod oom found, but pod parse cache error. pod uuid: %v, cache value: %v", uuid, cacheVal)
+			}
+		} else {
+			glog.Errorf("pod oom found, but pod get cache error. pod uuid: %v, cache value: %v, cache length: %v, cache items: %v", uuid, cacheVal, l.cache.ItemCount(), l.cache.Items())
+		}
+	}
+	// if failed to generate event message, return original event message.
+	return logMessage
+}
+
+func parseCache(uuid string, cacheValue string) (podName string, namespace string) {
+	// cache-key: pod uuid
+	// cache-value format: pod_name@pod_namespace
+	s := strings.Split(cacheValue, "@")
+	if len(s) == 2 {
+		return s[0], s[1]
+	} else {
+		glog.Errorf("pod oom found, but pod cache error. pod uuid: %v, cache value: %v", uuid, cacheValue)
+	}
+	return "", ""
+}
+
+func generatePodOOMEventMessage(podName string, podUUID string, namespace string, nodeName string) string {
+	return fmt.Sprintf("pod was OOM killed. node:%s pod:%s namespace:%s uuid:%s",
+		nodeName, podName, namespace, podUUID)
+}
+
 // initializeStatus initializes the internal condition and also reports it to the node problem detector.
 func (l *logMonitor) initializeStatus() {
 	// Initialize the default node conditions
@@ -294,6 +377,50 @@ func (l *logMonitor) initializeStatus() {
 	l.output <- &types.Status{
 		Source:     l.config.Source,
 		Conditions: l.conditions,
+	}
+}
+
+// listPodAndCache list pods on this node, find pod with pod uuid.
+func (l *logMonitor) listPodAndCache() error {
+	doneChan := make(chan bool)
+	defer close(doneChan)
+	statisticStartTime := time.Now().UnixNano()
+	pl, err := k8sClient.CoreV1().Pods("").List(metav1.ListOptions{
+		ResourceVersion: "0",
+		FieldSelector:   fmt.Sprintf("spec.nodeName=%s", nodeName),
+	})
+	statisticEndListPodTime := time.Now().UnixNano()
+	glog.Infof("listPod spend time: %v ms, startTime: %v nanoTimestamp, endTime: %v nanoTimestamp", (statisticEndListPodTime-statisticStartTime)/1e6, statisticStartTime, statisticEndListPodTime)
+	if err != nil {
+		glog.Error("Error in listing pods, error: %v", err.Error())
+		return err
+	}
+
+	// update cache
+	go func(pods []v1.Pod) {
+		defer util.Recovery()
+		for _, pod := range pods {
+			if _, ok := l.cache.Get(string(pod.UID)); ok {
+				// pod already in cache.
+			} else {
+				l.cache.Set(string(pod.UID), fmt.Sprintf("%s@%s", pod.Name, pod.Namespace), cache.DefaultExpiration+util.RandomDurationMinute(cacheExpireDurationMinutesEachPod))
+			}
+		}
+		doneChan <- true
+	}(pl.Items)
+	select {
+	case isDone := <-doneChan:
+		if isDone {
+			statisticEndCachePodTime := time.Now().UnixNano()
+			glog.V(8).Infof("pod cache content, cache length: %v, cache items: %v", l.cache.ItemCount(), l.cache.Items())
+			glog.Infof("listPodAndCache spend time: %v ms, startTime: %v nanoTimestamp, endTime: %v nanoTimestamp", (statisticEndCachePodTime-statisticStartTime)/1e6, statisticStartTime, statisticEndCachePodTime)
+			return nil
+		} else {
+			return errors.New("list pod and cache error")
+		}
+	case <-time.After(time.Second * 5):
+		glog.Errorf("listPodAndCache timeout. startTime: %v nanoTimestamp", statisticStartTime)
+		return errors.New("list pod and cache timeout")
 	}
 }
 

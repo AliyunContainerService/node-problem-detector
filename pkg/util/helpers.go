@@ -17,7 +17,10 @@ package util
 
 import (
 	"fmt"
+	"github.com/golang/glog"
+	"math/rand"
 	"regexp"
+	"runtime"
 	"time"
 
 	"k8s.io/node-problem-detector/pkg/types"
@@ -63,4 +66,26 @@ func GetStartTime(now time.Time, uptimeDuration time.Duration, lookbackStr strin
 	}
 
 	return startTime, nil
+}
+
+func Recovery() error {
+	if err := recover(); err != nil {
+		var e error
+		switch r := err.(type) {
+		case error:
+			e = r
+		default:
+			e = fmt.Errorf("%v", r)
+		}
+		stack := make([]byte, 2048)
+		length := runtime.Stack(stack, true)
+		glog.Errorf("[%s] %s %s\n", "PANIC RECOVER", e, stack[:length])
+		return e
+	}
+	return nil
+}
+
+func RandomDurationMinute(seedMinutes int64) time.Duration {
+	rand.Seed(time.Now().Unix())
+	return time.Duration(rand.Int63n(seedMinutes) * int64(time.Minute))
 }
