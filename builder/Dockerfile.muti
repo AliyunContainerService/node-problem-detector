@@ -68,7 +68,7 @@ MAINTAINER KeyOfSpectator <shichun.fsc@alibaba-inc.com>
 # default is a wildcard path that shouldn't match anything in COPY command. REF: https://github.com/kubernetes/node-problem-detector/blob/master/Makefile#L105
 ARG LOGCOUNTER=*dont-include-log-counter
 
-RUN yum install systemd -y && yum install pciutils -y && rm -rf /var/cache/yum/
+RUN yum install systemd -y && yum install pciutils -y && rm -rf /var/cache/yum/ && rm -rf /var/cache/dnf/
 RUN systemctl --version
 
 # RUN clean-install util-linux libsystemd0 systemd bash lsof curl
